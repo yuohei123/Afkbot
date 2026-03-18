@@ -1,10 +1,12 @@
 {
   "server": {
     "ip": "ward1.aternos.me",
-    "port": 35547,
-    "version": "1.21.11"
+    "port": 35547
   },
   "bot-account": {
-    "username": "Technoblade"
+    "username": "AFK_Bot"
+  },
+  "discord": {
+    "token": "bot1483739973902536846"
   }
 }
