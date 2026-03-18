@@ -1,28 +1,61 @@
+// ================= IMPORTS =================
 const mineflayer = require('mineflayer')
+const express = require('express')
+const fs = require('fs')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { GoalBlock } = goals
 const mcDataLoader = require('minecraft-data')
 
+// ================= CONFIG =================
 const config = require('./settings.json')
 
-// ================= BOT STATE =================
-let bot
-let botState = {
-  connected: false,
-  lastActivity: Date.now()
+// ================= WEB =================
+const app = express()
+app.get('/', (req, res) => res.json({ brain, memory, learning }))
+app.get('/task/:t', (req, res) => {
+  brain.force = req.params.t
+  res.send('Forced: ' + brain.force)
+})
+app.listen(3000, () => console.log('[Web] Running'))
+
+// ================= MEMORY =================
+const FILE = './memory.json'
+
+function load() {
+  try { return JSON.parse(fs.readFileSync(FILE)) }
+  catch { return { chests: [], farms: [], ores: [], home: null } }
+}
+function save() {
+  fs.writeFileSync(FILE, JSON.stringify(memory, null, 2))
 }
 
-// ================= HELPERS =================
-function sleep(ms) {
-  return new Promise(res => setTimeout(res, ms))
+let memory = load()
+
+setInterval(save, 30000)
+
+// ================= LEARNING =================
+let learning = { farm:1, mine:1, explore:1, store:1 }
+
+// ================= BRAIN =================
+let brain = {
+  state: 'idle',
+  task: null,
+  last: 0,
+  force: null
 }
 
-function isAdmin(name) {
-  const keywords = ['admin', 'mod', 'owner', 'staff']
-  return keywords.some(k => name.toLowerCase().includes(k))
+let cooldowns = {}
+
+function canRun(name) {
+  return !cooldowns[name] || Date.now() > cooldowns[name]
+}
+function cd(name, ms) {
+  cooldowns[name] = Date.now() + ms
 }
 
-// ================= CREATE BOT =================
+// ================= BOT =================
+let bot, mcData, move
+
 function createBot() {
   bot = mineflayer.createBot({
     host: config.server.ip,
@@ -34,272 +67,171 @@ function createBot() {
   bot.loadPlugin(pathfinder)
 
   bot.once('spawn', () => {
-    console.log('[Bot] Spawned')
+    mcData = mcDataLoader(config.server.version)
+    move = new Movements(bot, mcData)
 
-    botState.connected = true
-    const mcData = mcDataLoader(config.server.version)
-    const defaultMove = new Movements(bot, mcData)
+    memory.home = memory.home || bot.entity.position.floored()
 
-    // INIT SYSTEMS
-    startAFK(bot)
-    detectPlayers(bot)
-    autoFarm(bot)
-    autoStore(bot)
-    autoSleep(bot)
-    farmNavigator(bot, defaultMove)
-    autoMine(bot)
-    explore(bot, defaultMove)
-    mimic(bot)
+    scan()
+    brainLoop()
+    humanizeLoop()
+
+    console.log('[AI] FINAL FORM ONLINE')
   })
 
-  bot.on('end', () => {
-    console.log('[Bot] Disconnected, reconnecting...')
-    botState.connected = false
-    setTimeout(createBot, 5000)
-  })
-
-  bot.on('kicked', r => console.log('[Kicked]', r))
-  bot.on('error', err => console.log('[Error]', err.message))
+  bot.on('end', () => setTimeout(createBot, 5000))
 }
-
 createBot()
 
-// ================= ANTI-AFK =================
-function startAFK(bot) {
-  function loop() {
-    if (!botState.connected) return
-
-    const actions = [
-      () => bot.swingArm(),
-      () => bot.look(Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.5, true)
-    ]
-
-    actions[Math.floor(Math.random() * actions.length)]()
-
-    setTimeout(loop, 15000 + Math.random() * 20000)
-  }
-
-  loop()
-}
-
-// ================= PLAYER DETECTION =================
-function detectPlayers(bot) {
+// ================= SCAN =================
+function scan() {
   setInterval(() => {
     if (!bot.entity) return
 
-    const players = Object.values(bot.entities).filter(e =>
-      e.type === 'player' && e.username !== bot.username
-    )
+    const blocks = bot.findBlocks({ matching: b => true, maxDistance: 6, count: 30 })
 
-    for (const p of players) {
-      const dist = bot.entity.position.distanceTo(p.position)
+    blocks.forEach(p => {
+      const b = bot.blockAt(p)
+      if (!b) return
 
-      if (dist < 10) {
-        console.log('[Player Nearby]', p.username)
-
-        bot.clearControlStates()
-        bot.lookAt(p.position.offset(0, 1.6, 0))
-
-        if (isAdmin(p.username)) {
-          console.log('[Admin Detected] Leaving...')
-          bot.quit()
-        }
-      }
-    }
-  }, 4000)
-}
-
-// ================= FARMING =================
-function autoFarm(bot) {
-  async function loop() {
-    if (!bot.entity) return
-
-    try {
-      const crop = bot.findBlock({
-        matching: b => b.name === 'wheat' && b.metadata === 7,
-        maxDistance: 5
-      })
-
-      if (crop) {
-        await bot.dig(crop)
-        await sleep(800)
-        return schedule()
-      }
-
-      const farmland = bot.findBlock({
-        matching: b => b.name === 'farmland',
-        maxDistance: 5
-      })
-
-      if (farmland) {
-        const seed = bot.inventory.items().find(i => i.name.includes('seeds'))
-        if (seed) {
-          await bot.equip(seed, 'hand')
-          await bot.placeBlock(farmland, { x: 0, y: 1, z: 0 })
-        }
-      }
-
-    } catch {}
-
-    schedule()
-  }
-
-  function schedule() {
-    setTimeout(loop, 4000 + Math.random() * 4000)
-  }
-
-  loop()
-}
-
-// ================= STORAGE =================
-function autoStore(bot) {
-  setInterval(async () => {
-    if (!bot.entity) return
-
-    if (bot.inventory.emptySlotCount() > 2) return
-
-    const chestBlock = bot.findBlock({
-      matching: b => b.name.includes('chest'),
-      maxDistance: 6
+      remember('chests', b.name.includes('chest'), p)
+      remember('farms', b.name.includes('wheat'), p)
+      remember('ores', b.name.includes('ore'), p)
     })
 
-    if (!chestBlock) return
-
-    try {
-      const chest = await bot.openChest(chestBlock)
-
-      for (const item of bot.inventory.items()) {
-        if (item.name.includes('seeds')) continue
-        await chest.deposit(item.type, null, item.count)
-        await sleep(200)
-      }
-
-      chest.close()
-      console.log('[Stored Items]')
-    } catch {}
-
-  }, 15000)
-}
-
-// ================= SLEEP =================
-function autoSleep(bot) {
-  setInterval(async () => {
-    if (!bot.time) return
-
-    const time = bot.time.timeOfDay
-    const isNight = time > 13000 && time < 23000
-
-    if (isNight && !bot.isSleeping) {
-      const bed = bot.findBlock({
-        matching: b => b.name.includes('bed'),
-        maxDistance: 5
-      })
-
-      if (bed) {
-        try {
-          await bot.sleep(bed)
-          console.log('[Sleeping]')
-        } catch {}
-      }
-    }
   }, 10000)
 }
 
-// ================= FARM NAV =================
-function farmNavigator(bot, defaultMove) {
-  let i = 0
-
-  function move() {
-    if (!bot.entity) return
-
-    const farms = config.farms || []
-    if (farms.length === 0) return
-
-    const f = farms[i]
-
-    bot.pathfinder.setMovements(defaultMove)
-    bot.pathfinder.setGoal(new GoalBlock(f.x, f.y, f.z))
-
-    i = (i + 1) % farms.length
-
-    setTimeout(move, 30000 + Math.random() * 20000)
+function remember(type, cond, pos) {
+  if (!cond) return
+  if (!memory[type].some(x => x.x===pos.x && x.y===pos.y && x.z===pos.z)) {
+    memory[type].push(pos)
   }
-
-  move()
 }
 
-// ================= MINING =================
-function autoMine(bot) {
-  const ores = ['coal_ore', 'iron_ore']
-
-  async function loop() {
+// ================= BRAIN LOOP =================
+function brainLoop() {
+  setInterval(async () => {
     if (!bot.entity) return
+    if (Date.now() - brain.last < 3000) return
 
-    const block = bot.findBlock({
-      matching: b => ores.includes(b.name),
-      maxDistance: 5
-    })
+    let task = brain.force || decide()
 
-    if (block) {
-      try {
-        await bot.dig(block)
-        console.log('[Mining]', block.name)
-      } catch {}
+    if (!task) return
+
+    brain.task = task
+    brain.last = Date.now()
+
+    try {
+      await tasks[task]()
+      learning[task] = (learning[task] || 1) + 0.2
+    } catch {}
+
+  }, 2000)
+}
+
+// ================= DECISION =================
+function decide() {
+  const options = [
+    ['avoid', playerNear()],
+    ['sleep', isNight()],
+    ['store', fullInv()],
+    ['farm', memory.farms.length],
+    ['mine', memory.ores.length],
+    ['explore', true]
+  ]
+
+  return options
+    .filter(o => o[1])
+    .sort((a,b)=>(learning[b[0]]||1)-(learning[a[0]]||1))[0][0]
+}
+
+// ================= CONDITIONS =================
+function playerNear() {
+  return Object.values(bot.entities).some(e =>
+    e.type==='player' && e.username!==bot.username &&
+    bot.entity.position.distanceTo(e.position)<10)
+}
+function isNight() { return bot.time.timeOfDay > 13000 }
+function fullInv() { return bot.inventory.emptySlotCount()<2 }
+
+// ================= TASKS =================
+const tasks = {
+
+  async avoid() {
+    if (!canRun('avoid')) return
+    cd('avoid', 5000)
+
+    bot.clearControlStates()
+
+    const p = Object.values(bot.entities).find(e=>e.type==='player')
+    if (p) bot.lookAt(p.position.offset(0,1.6,0))
+
+    await sleep(2000)
+  },
+
+  async sleep() {
+    const bed = bot.findBlock({ matching:b=>b.name.includes('bed'), maxDistance:5 })
+    if (!bed) return
+    try { await bot.sleep(bed) } catch {}
+  },
+
+  async store() {
+    const pos = memory.chests[0]
+    if (!pos) return
+
+    await go(pos)
+
+    const chest = await bot.openChest(bot.blockAt(pos))
+    for (const item of bot.inventory.items()) {
+      if (item.name.includes('seeds')) continue
+      await chest.deposit(item.type,null,item.count)
     }
+    chest.close()
+  },
 
-    setTimeout(loop, 6000 + Math.random() * 6000)
+  async farm() {
+    const pos = memory.farms[0]
+    if (!pos) return
+    await go(pos)
+    await bot.dig(bot.blockAt(pos))
+  },
+
+  async mine() {
+    const pos = memory.ores[0]
+    if (!pos) return
+    await go(pos)
+    await bot.dig(bot.blockAt(pos))
+  },
+
+  async explore() {
+    const dx = Math.floor(Math.random()*10-5)
+    const dz = Math.floor(Math.random()*10-5)
+    await go(bot.entity.position.offset(dx,0,dz))
   }
 
-  loop()
 }
 
-// ================= EXPLORER =================
-function explore(bot, defaultMove) {
-  function wander() {
+// ================= MOVEMENT =================
+function go(pos) {
+  return new Promise(res => {
+    bot.pathfinder.setMovements(move)
+    bot.pathfinder.setGoal(new GoalBlock(pos.x,pos.y,pos.z))
+    setTimeout(res, 5000 + Math.random()*5000)
+  })
+}
+
+// ================= HUMANIZE =================
+function humanizeLoop() {
+  setInterval(()=>{
     if (!bot.entity) return
 
-    const dx = Math.floor(Math.random() * 10 - 5)
-    const dz = Math.floor(Math.random() * 10 - 5)
+    if (Math.random()<0.3) bot.swingArm()
+    if (Math.random()<0.2)
+      bot.look(Math.random()*Math.PI*2,(Math.random()-0.5)*0.5,true)
 
-    const pos = bot.entity.position.offset(dx, 0, dz)
-
-    bot.pathfinder.setMovements(defaultMove)
-    bot.pathfinder.setGoal(new GoalBlock(pos.x, pos.y, pos.z))
-
-    setTimeout(wander, 30000 + Math.random() * 30000)
-  }
-
-  wander()
+  }, 5000)
 }
 
-// ================= MIMIC =================
-function mimic(bot) {
-  setInterval(() => {
-    if (!bot.entity) return
-
-    const players = Object.values(bot.entities).filter(e =>
-      e.type === 'player' && e.username !== bot.username
-    )
-
-    if (players.length === 0) return
-
-    const target = players[Math.floor(Math.random() * players.length)]
-
-    if (!target.position) return
-
-    bot.lookAt(target.position.offset(0, 1.6, 0))
-
-    const dist = bot.entity.position.distanceTo(target.position)
-
-    if (dist > 3 && dist < 8) {
-      bot.setControlState('forward', true)
-    } else {
-      bot.clearControlStates()
-    }
-
-    if (Math.random() < 0.2) bot.swingArm()
-
-    setTimeout(() => bot.clearControlStates(), 500)
-
-  }, 3000)
-}
+// ================= UTIL =================
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
