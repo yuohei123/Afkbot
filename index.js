@@ -12,7 +12,7 @@ const config = {
   server: {
     ip: process.env.SERVER_IP || 'ward1.aternos.me',
     port: parseInt(process.env.SERVER_PORT) || 35547,
-    version: process.env.SERVER_VERSION || '1.21.11'
+    version: process.env.SERVER_VERSION || '1.21.11(127)'
   },
   'bot-account': {
     username: process.env.BOT_USERNAME || 'MyBot'
