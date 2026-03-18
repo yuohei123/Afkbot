@@ -48,7 +48,7 @@ function createBot() {
     version: config.server.version || false
   })
 
-  // Load mcData first to prevent pathfinder crash
+  // Load mcData first for 1.21.11
   try {
     mcData = mcDataLoader(bot.version)
     if (!mcData) throw new Error('mcData is null, unsupported version?')
