@@ -2,7 +2,7 @@
   "server": {
     "ip": "ward1.aternos.me",
     "port": 35547,
-    "version": "1.21.1"
+    "version": "1.21.11"
   },
   "bot-account": {
     "username": "AFK_Bot"
