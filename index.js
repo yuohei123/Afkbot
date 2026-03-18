@@ -1,6 +1,7 @@
 // ================= IMPORTS =================
 const mineflayer = require('mineflayer')
 const express = require('express')
+const { Client, GatewayIntentBits } = require('discord.js')
 
 // ================= CONFIG =================
 const config = require('./settings.json')
@@ -8,81 +9,114 @@ const config = require('./settings.json')
 // ================= WEB =================
 const app = express()
 app.get('/', (req, res) => res.send('Bot is running'))
-app.listen(3000, () => console.log('[Web] Running on port 3000'))
+app.listen(3000, () => console.log('[Web] Running'))
 
-// ================= BOT =================
+// ================= MINECRAFT BOT =================
 let bot
 
 function createBot() {
-  console.log('\n[BOOT] Starting bot...')
-  console.log('[INFO] Server:', config.server.ip)
+  console.log('[MC] Connecting...')
 
   bot = mineflayer.createBot({
     host: config.server.ip,
     port: config.server.port || 25565,
     username: config['bot-account'].username,
-    version: false // auto detect (IMPORTANT for 1.21+)
+    version: false
   })
 
-  // ===== CONNECTION EVENTS =====
-  bot.on('login', () => {
-    console.log('[BOT] Logged in')
-  })
+  bot.on('login', () => console.log('[MC] Logged in'))
 
   bot.on('spawn', () => {
-    console.log('[BOT] Spawned successfully')
-    console.log('[BOT] Version detected:', bot.version)
-
-    startAntiAFK()
-  })
-
-  bot.on('error', (err) => {
-    console.log('[ERROR]', err.message)
-  })
-
-  bot.on('kicked', (reason) => {
-    console.log('[KICKED]', reason)
+    console.log('[MC] Spawned')
+    antiAFK()
   })
 
   bot.on('end', () => {
-    console.log('[DISCONNECTED] Reconnecting in 5 seconds...')
+    console.log('[MC] Disconnected, reconnecting...')
     setTimeout(createBot, 5000)
   })
 
-  bot.on('message', (msg) => {
-    console.log('[CHAT]', msg.toString())
-
-    // Auto login for AuthMe (Aternos plugins)
-    if (msg.toString().includes('/login')) {
-      bot.chat('/login password123')
-    }
-    if (msg.toString().includes('/register')) {
-      bot.chat('/register password123 password123')
-    }
-  })
+  bot.on('error', err => console.log('[MC ERROR]', err.message))
 }
 
 createBot()
 
-// ================= ANTI AFK =================
-function startAntiAFK() {
-  console.log('[AFK] Anti-AFK started')
+// ================= DISCORD BOT =================
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+})
 
+client.once('ready', () => {
+  console.log(`[DISCORD] Logged in as ${client.user.tag}`)
+})
+
+client.on('messageCreate', async (msg) => {
+  if (!msg.content.startsWith('!')) return
+
+  const args = msg.content.slice(1).split(' ')
+  const cmd = args[0]
+
+  if (!bot || !bot.entity) {
+    return msg.reply('Minecraft bot not ready')
+  }
+
+  // ===== COMMANDS =====
+
+  if (cmd === 'say') {
+    const text = args.slice(1).join(' ')
+    bot.chat(text)
+    msg.reply('Sent message')
+  }
+
+  if (cmd === 'jump') {
+    bot.setControlState('jump', true)
+    setTimeout(() => bot.setControlState('jump', false), 500)
+    msg.reply('Jumped')
+  }
+
+  if (cmd === 'pos') {
+    const p = bot.entity.position
+    msg.reply(`Position: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`)
+  }
+
+  if (cmd === 'stop') {
+    bot.clearControlStates()
+    msg.reply('Stopped')
+  }
+
+  if (cmd === 'come') {
+    const player = bot.nearestEntity(e => e.type === 'player')
+    if (!player) return msg.reply('No player nearby')
+
+    const { pathfinder, goals } = require('mineflayer-pathfinder')
+    const { GoalNear } = goals
+
+    if (!bot.pathfinder) bot.loadPlugin(pathfinder)
+
+    bot.pathfinder.setGoal(new GoalNear(
+      player.position.x,
+      player.position.y,
+      player.position.z,
+      1
+    ))
+
+    msg.reply('Coming to player')
+  }
+})
+
+// ================= LOGIN =================
+client.login(config.discord.token)
+
+// ================= ANTI AFK =================
+function antiAFK() {
   setInterval(() => {
     if (!bot.entity) return
 
-    const yaw = Math.random() * Math.PI * 2
-    const pitch = (Math.random() - 0.5) * 0.5
-
-    bot.look(yaw, pitch, true)
+    bot.look(Math.random() * Math.PI * 2, 0, true)
 
     if (Math.random() < 0.5) {
       bot.setControlState('jump', true)
-      setTimeout(() => bot.setControlState('jump', false), 500)
-    }
-
-    if (Math.random() < 0.3) {
-      bot.swingArm()
+      setTimeout(() => bot.setControlState('jump', false), 300)
     }
 
   }, 10000)
