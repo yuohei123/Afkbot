@@ -55,11 +55,11 @@ function createBot() {
   } catch (err) {
     console.error('[ERROR] Failed to load minecraft-data for version', bot.version)
     console.error(err)
-    bot.quit()
+    bot.end() // safe disconnect
     return
   }
 
-  bot.loadPlugin(pathfinder) // safe now
+  bot.loadPlugin(pathfinder)
 
   bot.once('spawn', () => {
     move = new Movements(bot, mcData)
