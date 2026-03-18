@@ -46,12 +46,18 @@ const maxReconnectTimeout = 60000 // 1 minute max
 
 // ================= CREATE BOT =================
 function createBot() {
-  bot = mineflayer.createBot({
-    host: config.server.ip,
-    port: config.server.port,
-    username: config['bot-account'].username,
-    version: config.server.version
-  })
+  try {
+    bot = mineflayer.createBot({
+      host: config.server.ip,
+      port: config.server.port,
+      username: config['bot-account'].username,
+      version: config.server.version
+    })
+  } catch (err) {
+    console.log('[Bot] Initial connection failed. Retrying in 5s:', err.message)
+    setTimeout(createBot, 5000)
+    return
+  }
 
   bot.loadPlugin(pathfinder)
 
@@ -61,7 +67,7 @@ function createBot() {
     lastReconnect = new Date(botOnlineSince).toISOString()
     reconnectAttempts = 0
     reconnectTimeout = 5000
-    logUptime() // immediate log
+    console.log('[Bot] Connected successfully')
 
     mcData = mcDataLoader(config.server.version)
     move = new Movements(bot, mcData)
@@ -70,39 +76,49 @@ function createBot() {
     scan()
     brainLoop()
     humanizeLoop()
-
-    console.log('[AI] Bot online and operational')
   })
 
-  // ================= DISCONNECT HANDLING =================
-  bot.on('end', () => {
-    const now = Date.now()
-    if (botOnlineSince) totalOnlineMs += now - botOnlineSince
-    botOnlineSince = null
-
-    lastDisconnect = now
-
-    // Calculate offline duration for alert
-    let offlineSec = lastReconnect ? (now - new Date(lastReconnect)) / 1000 : 0
-    if (offlineSec > offlineThresholdSec) {
-      console.log(`\x1b[31m[LONG OFFLINE ALERT] Bot was offline for ${Math.floor(offlineSec/60)}m ${Math.floor(offlineSec%60)}s\x1b[0m`)
-    }
-
-    console.log(`\x1b[33m[Bot] Disconnected. Reconnecting in ${reconnectTimeout/1000}s...\x1b[0m`)
-    reconnectAttempts++
-    reconnectTimeout = Math.min(reconnectTimeout * 1.5, maxReconnectTimeout)
-    setTimeout(createBot, reconnectTimeout)
-  })
-
-  bot.on('kicked', (reason) => console.log('\x1b[31m[Bot] Kicked:\x1b[0m', reason.toString()))
-  bot.on('error', (err) => console.log('\x1b[31m[Bot] Error:\x1b[0m', err))
+  // ================= ERROR / DISCONNECT HANDLERS =================
+  bot.on('end', handleDisconnect)
+  bot.on('error', handleError)
+  bot.on('kicked', handleKick)
 
   // ================= PATHFINDER LOGGING =================
   bot.on('path_update', (r) => console.log('[Pathfinder] status', r.status))
   bot.on('goal_reached', () => console.log('[Pathfinder] Goal reached'))
   bot.on('path_reset', (reason) => console.log('[Pathfinder] Path reset:', reason))
 }
-createBot()
+
+// ================= HANDLER FUNCTIONS =================
+function handleDisconnect() {
+  const now = Date.now()
+  if(botOnlineSince) totalOnlineMs += now - botOnlineSince
+  botOnlineSince = null
+  lastDisconnect = now
+
+  let offlineSec = lastReconnect ? (now - new Date(lastReconnect))/1000 : 0
+  if(offlineSec > offlineThresholdSec) {
+    console.log(`\x1b[31m[LONG OFFLINE ALERT] Bot was offline for ${Math.floor(offlineSec/60)}m ${Math.floor(offlineSec%60)}s\x1b[0m`)
+  }
+
+  console.log(`[Bot] Disconnected. Reconnecting in ${reconnectTimeout/1000}s...`)
+  reconnectAttempts++
+  reconnectTimeout = Math.min(reconnectTimeout * 1.5, maxReconnectTimeout)
+  setTimeout(createBot, reconnectTimeout)
+}
+
+function handleError(err) {
+  console.log('[Bot] Error:', err.message)
+  if(err.code === 'ECONNREFUSED' || err.message.includes('Timed out')) {
+    console.log('[Bot] Connection refused or timed out. Retrying...')
+    setTimeout(createBot, reconnectTimeout)
+  }
+}
+
+function handleKick(reason) {
+  console.log('[Bot] Kicked:', reason.toString())
+  setTimeout(createBot, reconnectTimeout)
+}
 
 // ================= SCAN =================
 function scan() {
@@ -225,7 +241,7 @@ app.get('/uptime', (req,res)=>{
   const totalSec=Math.floor(msTotal/1000), totalMin=Math.floor(totalSec/60), totalH=Math.floor(totalMin/60)
   const totalFormatted=`${totalH}h ${totalMin%60}m ${totalSec%60}s`
   let sessionFormatted='0s'; if(botOnlineSince){const sessSec=Math.floor((Date.now()-botOnlineSince)/1000),sh=Math.floor(sessSec/3600),sm=Math.floor((sessSec%3600)/60),ss=sessSec%60;sessionFormatted=`${sh}h ${sm}m ${ss}s`}
-  let offlineFormatted=null; if(lastDisconnect && lastReconnect){const offMs=new Date(lastReconnect)-new Date(lastDisconnect),offSec=Math.floor(offMs/1000),oh=Math.floor(offSec/3600),om=Math.floor((offSec%3600)/60),os=offSec%60;offlineFormatted=`${oh}h ${om}m ${os}s`}
+  let offlineFormatted=null; if(lastDisconnect && lastReconnect){const offMs=new Date(lastReconnect)-new Date(lastDisconnect),offSec=Math.floor(offMs/1000),oh=Math.floor(offSec/3600),om=Math.floor((offSec%3600)/60),os=Math.floor(offSec%60);offlineFormatted=`${oh}h ${om}m ${os}s`}
   const summary=`Bot online for ${totalFormatted} (current session ${sessionFormatted})${offlineFormatted?`, last offline ${offlineFormatted}`:''}`
   res.json({ total:{ms:msTotal,seconds:totalSec,formatted:totalFormatted}, session:{ms:botOnlineSince?Date.now()-botOnlineSince:0,seconds:botOnlineSince?Math.floor((Date.now()-botOnlineSince)/1000):0,formatted:sessionFormatted}, lastDisconnect:lastDisconnect?new Date(lastDisconnect).toISOString():null, lastReconnect:lastReconnect, offlineDuration:offlineFormatted, summary })
 })
