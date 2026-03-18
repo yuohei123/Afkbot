@@ -12,10 +12,7 @@ const config = require('./settings.json')
 // ================= WEB =================
 const app = express()
 app.get('/', (req, res) => res.json({ brain, memory, learning }))
-app.get('/task/:t', (req, res) => {
-  brain.force = req.params.t
-  res.send('Forced: ' + brain.force)
-})
+app.get('/task/:t', (req, res) => { brain.force = req.params.t; res.send('Forced: ' + brain.force) })
 app.listen(3000, () => console.log('[Web] Running'))
 
 // ================= MEMORY =================
@@ -40,8 +37,14 @@ let botOnlineSince = null
 let totalOnlineMs = 0
 let lastDisconnect = null
 let lastReconnect = null
-const offlineThresholdSec = 300 // 5 minutes for [LONG OFFLINE] warning
+const offlineThresholdSec = 300
 
+// ================= RECONNECT BACKOFF =================
+let reconnectTimeout = 5000 // initial 5s
+let reconnectAttempts = 0
+const maxReconnectTimeout = 60000 // 1 minute max
+
+// ================= CREATE BOT =================
 function createBot() {
   bot = mineflayer.createBot({
     host: config.server.ip,
@@ -52,37 +55,52 @@ function createBot() {
 
   bot.loadPlugin(pathfinder)
 
+  // ================= SPAWN =================
   bot.once('spawn', () => {
     botOnlineSince = Date.now()
     lastReconnect = new Date(botOnlineSince).toISOString()
-
-    logUptime() // immediate log on reconnect
+    reconnectAttempts = 0
+    reconnectTimeout = 5000
+    logUptime() // immediate log
 
     mcData = mcDataLoader(config.server.version)
     move = new Movements(bot, mcData)
-
     memory.home = memory.home || bot.entity.position.floored()
 
     scan()
     brainLoop()
     humanizeLoop()
 
-    console.log('[AI] FINAL FORM ONLINE')
+    console.log('[AI] Bot online and operational')
   })
 
+  // ================= DISCONNECT HANDLING =================
   bot.on('end', () => {
-    if (botOnlineSince) {
-      totalOnlineMs += Date.now() - botOnlineSince
-      botOnlineSince = null
+    const now = Date.now()
+    if (botOnlineSince) totalOnlineMs += now - botOnlineSince
+    botOnlineSince = null
+
+    lastDisconnect = now
+
+    // Calculate offline duration for alert
+    let offlineSec = lastReconnect ? (now - new Date(lastReconnect)) / 1000 : 0
+    if (offlineSec > offlineThresholdSec) {
+      console.log(`\x1b[31m[LONG OFFLINE ALERT] Bot was offline for ${Math.floor(offlineSec/60)}m ${Math.floor(offlineSec%60)}s\x1b[0m`)
     }
-    lastDisconnect = Date.now()
-    console.log('\x1b[33m[Bot disconnected] Reconnecting in 5 seconds...\x1b[0m')
-    setTimeout(createBot, 5000)
+
+    console.log(`\x1b[33m[Bot] Disconnected. Reconnecting in ${reconnectTimeout/1000}s...\x1b[0m`)
+    reconnectAttempts++
+    reconnectTimeout = Math.min(reconnectTimeout * 1.5, maxReconnectTimeout)
+    setTimeout(createBot, reconnectTimeout)
   })
 
-  bot.on('error', err => {
-    console.log('\x1b[31m[Bot error]\x1b[0m', err)
-  })
+  bot.on('kicked', (reason) => console.log('\x1b[31m[Bot] Kicked:\x1b[0m', reason.toString()))
+  bot.on('error', (err) => console.log('\x1b[31m[Bot] Error:\x1b[0m', err))
+
+  // ================= PATHFINDER LOGGING =================
+  bot.on('path_update', (r) => console.log('[Pathfinder] status', r.status))
+  bot.on('goal_reached', () => console.log('[Pathfinder] Goal reached'))
+  bot.on('path_reset', (reason) => console.log('[Pathfinder] Path reset:', reason))
 }
 createBot()
 
@@ -112,17 +130,11 @@ function brainLoop() {
   setInterval(async () => {
     if (!bot.entity) return
     if (Date.now() - brain.last < 3000) return
-
     let task = brain.force || decide()
     if (!task) return
-
     brain.task = task
     brain.last = Date.now()
-
-    try {
-      await tasks[task]()
-      learning[task] = (learning[task] || 1) + 0.2
-    } catch {}
+    try { await tasks[task]() ; learning[task] = (learning[task]||1)+0.2 } catch {}
   }, 2000)
 }
 
@@ -146,24 +158,11 @@ function fullInv() { return bot.inventory.emptySlotCount()<2 }
 
 // ================= TASKS =================
 const tasks = {
-  async avoid() {
-    if (!canRun('avoid')) return
-    cd('avoid', 5000)
-    bot.clearControlStates()
-    const p = Object.values(bot.entities).find(e=>e.type==='player')
-    if (p) bot.lookAt(p.position.offset(0,1.6,0))
-    await sleep(2000)
-  },
-  async sleep() { const bed = bot.findBlock({ matching:b=>b.name.includes('bed'), maxDistance:5 }); if (!bed) return; try { await bot.sleep(bed) } catch {} },
-  async store() {
-    const pos = memory.chests[0]; if (!pos) return
-    await go(pos)
-    const chest = await bot.openChest(bot.blockAt(pos))
-    for (const item of bot.inventory.items()) { if (!item.name.includes('seeds')) await chest.deposit(item.type,null,item.count) }
-    chest.close()
-  },
-  async farm() { const pos = memory.farms[0]; if (!pos) return; await go(pos); await bot.dig(bot.blockAt(pos)) },
-  async mine() { const pos = memory.ores[0]; if (!pos) return; await go(pos); await bot.dig(bot.blockAt(pos)) },
+  async avoid() { if(!canRun('avoid')) return; cd('avoid',5000); bot.clearControlStates(); const p = Object.values(bot.entities).find(e=>e.type==='player'); if(p) bot.lookAt(p.position.offset(0,1.6,0)); await sleep(2000) },
+  async sleep() { const bed = bot.findBlock({ matching:b=>b.name.includes('bed'), maxDistance:5 }); if(!bed) return; try { await bot.sleep(bed) } catch {} },
+  async store() { const pos = memory.chests[0]; if(!pos) return; await go(pos); const chest = await bot.openChest(bot.blockAt(pos)); for(const item of bot.inventory.items()){if(!item.name.includes('seeds')) await chest.deposit(item.type,null,item.count)} chest.close() },
+  async farm() { const pos = memory.farms[0]; if(!pos) return; const block = bot.blockAt(pos); if(block) await bot.dig(block) },
+  async mine() { const pos = memory.ores[0]; if(!pos) return; const block = bot.blockAt(pos); if(block) await bot.dig(block) },
   async explore() { const dx = Math.floor(Math.random()*10-5); const dz = Math.floor(Math.random()*10-5); await go(bot.entity.position.offset(dx,0,dz)) }
 }
 
@@ -171,7 +170,7 @@ const tasks = {
 function go(pos) { return new Promise(res => { bot.pathfinder.setMovements(move); bot.pathfinder.setGoal(new GoalBlock(pos.x,pos.y,pos.z)); setTimeout(res, 5000 + Math.random()*5000) }) }
 
 // ================= HUMANIZE =================
-function humanizeLoop() { setInterval(()=>{ if (!bot.entity) return; if (Math.random()<0.3) bot.swingArm(); if (Math.random()<0.2) bot.look(Math.random()*Math.PI*2,(Math.random()-0.5)*0.5,true) },5000) }
+function humanizeLoop() { setInterval(()=>{ if(!bot.entity) return; if(Math.random()<0.3) bot.swingArm(); if(Math.random()<0.2) bot.look(Math.random()*Math.PI*2,(Math.random()-0.5)*0.5,true) },5000) }
 
 // ================= UTIL =================
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
@@ -179,54 +178,54 @@ function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 // ================= UPTIME LOG =================
 function logUptime() {
   let msTotal = totalOnlineMs
-  if (botOnlineSince) msTotal += Date.now() - botOnlineSince
-
+  if(botOnlineSince) msTotal += Date.now() - botOnlineSince
   const totalSec = Math.floor(msTotal/1000), totalMin = Math.floor(totalSec/60), totalH = Math.floor(totalMin/60)
   const totalFormatted = `${totalH}h ${totalMin%60}m ${totalSec%60}s`
 
   let sessionFormatted = '0s'
-  if (botOnlineSince) {
+  if(botOnlineSince){
     const sessSec = Math.floor((Date.now()-botOnlineSince)/1000)
-    const sh = Math.floor(sessSec/3600), sm=Math.floor((sessSec%3600)/60), ss=sessSec%60
+    const sh = Math.floor(sessSec/3600)
+    const sm = Math.floor((sessSec%3600)/60)
+    const ss = sessSec%60
     sessionFormatted = `${sh}h ${sm}m ${ss}s`
   }
 
-  let offlineFormatted = null, offlineWarning = ''
-  if (lastDisconnect && lastReconnect) {
+  let offlineFormatted = null
+  let offlineWarning = ''
+  if(lastDisconnect && lastReconnect){
     const offMs = new Date(lastReconnect)-new Date(lastDisconnect)
     const offSec = Math.floor(offMs/1000)
-    const oh=Math.floor(offSec/3600), om=Math.floor((offSec%3600)/60), os=offSec%60
+    const oh = Math.floor(offSec/3600), om = Math.floor((offSec%3600)/60), os = offSec%60
     offlineFormatted = `${oh}h ${om}m ${os}s`
-    if (offSec > offlineThresholdSec) offlineWarning = '\x1b[31m[LONG OFFLINE]\x1b[0m '
+    if(offSec > offlineThresholdSec) offlineWarning = '\x1b[31m[LONG OFFLINE]\x1b[0m '
   }
 
   let summary = `Bot online for ${totalFormatted} (current session ${sessionFormatted})`
-  if (offlineFormatted) summary += `, last offline ${offlineFormatted}`
+  if(offlineFormatted) summary += `, last offline ${offlineFormatted}`
   console.log(`${offlineWarning}[Uptime] ${summary}`)
 }
-
 setInterval(logUptime, 180000) // every 3 minutes
+
+// ================= LIVE UPTIME EVERY MINUTE =================
+setInterval(() => {
+  if (!botOnlineSince) return
+  const ms = Date.now() - botOnlineSince
+  const sec = Math.floor(ms / 1000)
+  const min = Math.floor(sec / 60)
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  const s = sec % 60
+  process.stdout.write(`\r[Live Uptime] Session: ${h}h ${m}m ${s}s `)
+}, 60000) // 1 minute
 
 // ================= UPTIME API =================
 app.get('/uptime', (req,res)=>{
-  let msTotal = totalOnlineMs; if (botOnlineSince) msTotal+=Date.now()-botOnlineSince
-  const totalSec = Math.floor(msTotal/1000), totalMin = Math.floor(totalSec/60), totalH = Math.floor(totalMin/60)
-  const totalFormatted = `${totalH}h ${totalMin%60}m ${totalSec%60}s`
-
-  let sessionFormatted='0s'
-  if(botOnlineSince){const sessSec=Math.floor((Date.now()-botOnlineSince)/1000),sh=Math.floor(sessSec/3600),sm=Math.floor((sessSec%3600)/60),ss=sessSec%60;sessionFormatted=`${sh}h ${sm}m ${ss}s`}
-
-  let offlineFormatted=null
-  if(lastDisconnect && lastReconnect){const offMs=new Date(lastReconnect)-new Date(lastDisconnect),offSec=Math.floor(offMs/1000),oh=Math.floor(offSec/3600),om=Math.floor((offSec%3600)/60),os=offSec%60;offlineFormatted=`${oh}h ${om}m ${os}s`}
-
+  let msTotal = totalOnlineMs; if(botOnlineSince) msTotal+=Date.now()-botOnlineSince
+  const totalSec=Math.floor(msTotal/1000), totalMin=Math.floor(totalSec/60), totalH=Math.floor(totalMin/60)
+  const totalFormatted=`${totalH}h ${totalMin%60}m ${totalSec%60}s`
+  let sessionFormatted='0s'; if(botOnlineSince){const sessSec=Math.floor((Date.now()-botOnlineSince)/1000),sh=Math.floor(sessSec/3600),sm=Math.floor((sessSec%3600)/60),ss=sessSec%60;sessionFormatted=`${sh}h ${sm}m ${ss}s`}
+  let offlineFormatted=null; if(lastDisconnect && lastReconnect){const offMs=new Date(lastReconnect)-new Date(lastDisconnect),offSec=Math.floor(offMs/1000),oh=Math.floor(offSec/3600),om=Math.floor((offSec%3600)/60),os=offSec%60;offlineFormatted=`${oh}h ${om}m ${os}s`}
   const summary=`Bot online for ${totalFormatted} (current session ${sessionFormatted})${offlineFormatted?`, last offline ${offlineFormatted}`:''}`
-
-  res.json({
-    total:{ms:msTotal,seconds:totalSec,formatted:totalFormatted},
-    session:{ms:botOnlineSince?Date.now()-botOnlineSince:0,seconds:botOnlineSince?Math.floor((Date.now()-botOnlineSince)/1000):0,formatted:sessionFormatted},
-    lastDisconnect:lastDisconnect?new Date(lastDisconnect).toISOString():null,
-    lastReconnect:lastReconnect,
-    offlineDuration:offlineFormatted,
-    summary
-  })
+  res.json({ total:{ms:msTotal,seconds:totalSec,formatted:totalFormatted}, session:{ms:botOnlineSince?Date.now()-botOnlineSince:0,seconds:botOnlineSince?Math.floor((Date.now()-botOnlineSince)/1000):0,formatted:sessionFormatted}, lastDisconnect:lastDisconnect?new Date(lastDisconnect).toISOString():null, lastReconnect:lastReconnect, offlineDuration:offlineFormatted, summary })
 })
