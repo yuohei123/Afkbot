@@ -1,18 +1,15 @@
 {
   "name": "minecraft-afk-bot",
   "version": "1.0.0",
-  "description": "A Mineflayer AFK bot with web API and automated tasks",
+  "description": "Mineflayer AFK bot deployed on Render",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "dotenv": "^16.1.4",
     "express": "^4.18.2",
-    "mineflayer": "^4.7.1",
-    "mineflayer-pathfinder": "^1.6.3",
-    "minecraft-data": "^2.99.1"
-  },
-  "author": "",
-  "license": "MIT"
+    "mineflayer": "^4.8.0",
+    "mineflayer-pathfinder": "^1.8.8",
+    "minecraft-data": "^2.0.0"
+  }
 }
