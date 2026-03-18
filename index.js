@@ -48,19 +48,20 @@ function createBot() {
     version: config.server.version || false
   })
 
-  bot.loadPlugin(pathfinder)
+  // Load mcData first to prevent pathfinder crash
+  try {
+    mcData = mcDataLoader(bot.version)
+    if (!mcData) throw new Error('mcData is null, unsupported version?')
+  } catch (err) {
+    console.error('[ERROR] Failed to load minecraft-data for version', bot.version)
+    console.error(err)
+    bot.quit()
+    return
+  }
+
+  bot.loadPlugin(pathfinder) // safe now
 
   bot.once('spawn', () => {
-    try {
-      mcData = mcDataLoader(bot.version)
-      if (!mcData) throw new Error('mcData is null, unsupported version?')
-    } catch (err) {
-      console.error('[ERROR] Failed to load minecraft-data for version', bot.version)
-      console.error(err)
-      bot.quit()
-      return
-    }
-
     move = new Movements(bot, mcData)
     memory.home = memory.home || bot.entity.position.floored()
 
@@ -76,9 +77,7 @@ function createBot() {
     setTimeout(createBot, 5000)
   })
 
-  bot.on('error', (err) => {
-    console.error('[BOT ERROR]', err)
-  })
+  bot.on('error', (err) => console.error('[BOT ERROR]', err))
 }
 createBot()
 
