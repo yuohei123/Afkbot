@@ -5,10 +5,6 @@
     "version": "1.21.11"
   },
   "bot-account": {
-    "username": "AFK_Bot"
-  },
-  "farms": [
-    { "x": 100, "y": 64, "z": 100 },
-    { "x": 105, "y": 64, "z": 105 }
-  ]
+    "username": "MyBot"
+  }
 }
