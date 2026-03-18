@@ -45,23 +45,23 @@ function createBot() {
     host: config.server.ip,
     port: config.server.port,
     username: config['bot-account'].username,
-    version: config.server.version || false
+    version: false // auto-detect server version
   })
 
-  // Load mcData first for 1.21.11
-  try {
-    mcData = mcDataLoader(bot.version)
-    if (!mcData) throw new Error('mcData is null, unsupported version?')
-  } catch (err) {
-    console.error('[ERROR] Failed to load minecraft-data for version', bot.version)
-    console.error(err)
-    bot.end() // safe disconnect
-    return
-  }
-
-  bot.loadPlugin(pathfinder)
-
   bot.once('spawn', () => {
+    console.log('[BOT] Spawned, detected version:', bot.version)
+
+    // Load mcData for detected version
+    try {
+      mcData = mcDataLoader(bot.version)
+      if (!mcData) throw new Error('mcData is null for version ' + bot.version)
+    } catch (err) {
+      console.error('[ERROR] Failed to load mcData', err)
+      bot.end()
+      return
+    }
+
+    bot.loadPlugin(pathfinder)
     move = new Movements(bot, mcData)
     memory.home = memory.home || bot.entity.position.floored()
 
@@ -85,9 +85,10 @@ createBot()
 function scan() {
   setInterval(() => {
     if (!bot.entity) return
-    const blocks = bot.findBlocks({ 
-      matching: b => b.name.includes('ore') || b.name.includes('wheat') || b.name.includes('chest'), 
-      maxDistance: 6, count: 30 
+    const blocks = bot.findBlocks({
+      matching: b => b.name.includes('ore') || b.name.includes('wheat') || b.name.includes('chest'),
+      maxDistance: 6,
+      count: 30
     })
     blocks.forEach(p => {
       const b = bot.blockAt(p)
