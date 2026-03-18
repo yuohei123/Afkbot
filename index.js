@@ -1,4 +1,5 @@
 // ================= IMPORTS =================
+require('dotenv').config() // load environment variables
 const mineflayer = require('mineflayer')
 const express = require('express')
 const fs = require('fs')
@@ -7,13 +8,22 @@ const { GoalBlock } = goals
 const mcDataLoader = require('minecraft-data')
 
 // ================= CONFIG =================
-const config = require('./settings.json')
+const config = {
+  server: {
+    ip: process.env.SERVER_IP || 'localhost',
+    port: parseInt(process.env.SERVER_PORT) || 25565,
+    version: process.env.SERVER_VERSION || '1.20.2'
+  },
+  'bot-account': {
+    username: process.env.BOT_USERNAME || 'MyBot'
+  }
+}
 
 // ================= WEB =================
 const app = express()
 app.get('/', (req, res) => res.json({ brain, memory, learning }))
 app.get('/task/:t', (req, res) => { brain.force = req.params.t; res.send('Forced: ' + brain.force) })
-app.listen(3000, () => console.log('[Web] Running'))
+app.listen(parseInt(process.env.PORT) || 3000, () => console.log('[Web] Running'))
 
 // ================= MEMORY =================
 const FILE = './memory.json'
@@ -40,9 +50,9 @@ let lastReconnect = null
 const offlineThresholdSec = 300
 
 // ================= RECONNECT BACKOFF =================
-let reconnectTimeout = 5000 // initial 5s
+let reconnectTimeout = 5000
 let reconnectAttempts = 0
-const maxReconnectTimeout = 60000 // 1 minute max
+const maxReconnectTimeout = 60000
 
 // ================= CREATE BOT =================
 function createBot() {
@@ -61,7 +71,6 @@ function createBot() {
 
   bot.loadPlugin(pathfinder)
 
-  // ================= SPAWN =================
   bot.once('spawn', () => {
     botOnlineSince = Date.now()
     lastReconnect = new Date(botOnlineSince).toISOString()
@@ -78,15 +87,9 @@ function createBot() {
     humanizeLoop()
   })
 
-  // ================= ERROR / DISCONNECT HANDLERS =================
   bot.on('end', handleDisconnect)
   bot.on('error', handleError)
   bot.on('kicked', handleKick)
-
-  // ================= PATHFINDER LOGGING =================
-  bot.on('path_update', (r) => console.log('[Pathfinder] status', r.status))
-  bot.on('goal_reached', () => console.log('[Pathfinder] Goal reached'))
-  bot.on('path_reset', (reason) => console.log('[Pathfinder] Path reset:', reason))
 }
 
 // ================= HANDLER FUNCTIONS =================
@@ -221,7 +224,7 @@ function logUptime() {
   if(offlineFormatted) summary += `, last offline ${offlineFormatted}`
   console.log(`${offlineWarning}[Uptime] ${summary}`)
 }
-setInterval(logUptime, 180000) // every 3 minutes
+setInterval(logUptime, 180000)
 
 // ================= LIVE UPTIME EVERY MINUTE =================
 setInterval(() => {
@@ -233,7 +236,7 @@ setInterval(() => {
   const m = min % 60
   const s = sec % 60
   process.stdout.write(`\r[Live Uptime] Session: ${h}h ${m}m ${s}s `)
-}, 60000) // 1 minute
+}, 60000)
 
 // ================= UPTIME API =================
 app.get('/uptime', (req,res)=>{
@@ -245,3 +248,6 @@ app.get('/uptime', (req,res)=>{
   const summary=`Bot online for ${totalFormatted} (current session ${sessionFormatted})${offlineFormatted?`, last offline ${offlineFormatted}`:''}`
   res.json({ total:{ms:msTotal,seconds:totalSec,formatted:totalFormatted}, session:{ms:botOnlineSince?Date.now()-botOnlineSince:0,seconds:botOnlineSince?Math.floor((Date.now()-botOnlineSince)/1000):0,formatted:sessionFormatted}, lastDisconnect:lastDisconnect?new Date(lastDisconnect).toISOString():null, lastReconnect:lastReconnect, offlineDuration:offlineFormatted, summary })
 })
+
+// ================= START BOT =================
+createBot()
