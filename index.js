@@ -20,38 +20,22 @@ app.listen(3000, () => console.log('[Web] Running'))
 
 // ================= MEMORY =================
 const FILE = './memory.json'
-
 function load() {
   try { return JSON.parse(fs.readFileSync(FILE)) }
   catch { return { chests: [], farms: [], ores: [], home: null } }
 }
-function save() {
-  fs.writeFileSync(FILE, JSON.stringify(memory, null, 2))
-}
-
+function save() { fs.writeFileSync(FILE, JSON.stringify(memory, null, 2)) }
 let memory = load()
-
 setInterval(save, 30000)
 
 // ================= LEARNING =================
 let learning = { farm:1, mine:1, explore:1, store:1 }
 
 // ================= BRAIN =================
-let brain = {
-  state: 'idle',
-  task: null,
-  last: 0,
-  force: null
-}
-
+let brain = { state: 'idle', task: null, last: 0, force: null }
 let cooldowns = {}
-
-function canRun(name) {
-  return !cooldowns[name] || Date.now() > cooldowns[name]
-}
-function cd(name, ms) {
-  cooldowns[name] = Date.now() + ms
-}
+function canRun(name) { return !cooldowns[name] || Date.now() > cooldowns[name] }
+function cd(name, ms) { cooldowns[name] = Date.now() + ms }
 
 // ================= BOT =================
 let bot, mcData, move
@@ -61,15 +45,23 @@ function createBot() {
     host: config.server.ip,
     port: config.server.port,
     username: config['bot-account'].username,
-    version: config.server.version
+    version: config.server.version || false
   })
 
   bot.loadPlugin(pathfinder)
 
   bot.once('spawn', () => {
-    mcData = mcDataLoader(config.server.version)
-    move = new Movements(bot, mcData)
+    try {
+      mcData = mcDataLoader(bot.version)
+      if (!mcData) throw new Error('mcData is null, unsupported version?')
+    } catch (err) {
+      console.error('[ERROR] Failed to load minecraft-data for version', bot.version)
+      console.error(err)
+      bot.quit()
+      return
+    }
 
+    move = new Movements(bot, mcData)
     memory.home = memory.home || bot.entity.position.floored()
 
     scan()
@@ -79,7 +71,14 @@ function createBot() {
     console.log('[AI] FINAL FORM ONLINE')
   })
 
-  bot.on('end', () => setTimeout(createBot, 5000))
+  bot.on('end', () => {
+    console.warn('[BOT] Disconnected, retrying in 5s...')
+    setTimeout(createBot, 5000)
+  })
+
+  bot.on('error', (err) => {
+    console.error('[BOT ERROR]', err)
+  })
 }
 createBot()
 
@@ -87,25 +86,24 @@ createBot()
 function scan() {
   setInterval(() => {
     if (!bot.entity) return
-
-    const blocks = bot.findBlocks({ matching: b => true, maxDistance: 6, count: 30 })
-
+    const blocks = bot.findBlocks({ 
+      matching: b => b.name.includes('ore') || b.name.includes('wheat') || b.name.includes('chest'), 
+      maxDistance: 6, count: 30 
+    })
     blocks.forEach(p => {
       const b = bot.blockAt(p)
       if (!b) return
-
       remember('chests', b.name.includes('chest'), p)
       remember('farms', b.name.includes('wheat'), p)
       remember('ores', b.name.includes('ore'), p)
     })
-
   }, 10000)
 }
-
 function remember(type, cond, pos) {
   if (!cond) return
   if (!memory[type].some(x => x.x===pos.x && x.y===pos.y && x.z===pos.z)) {
     memory[type].push(pos)
+    console.log(`[MEMORY] Added ${type} at ${pos.x},${pos.y},${pos.z}`)
   }
 }
 
@@ -116,17 +114,18 @@ function brainLoop() {
     if (Date.now() - brain.last < 3000) return
 
     let task = brain.force || decide()
-
     if (!task) return
 
     brain.task = task
     brain.last = Date.now()
 
+    console.log(`[BRAIN] Executing task: ${task}`)
     try {
       await tasks[task]()
       learning[task] = (learning[task] || 1) + 0.2
-    } catch {}
-
+    } catch (err) {
+      console.error('[TASK ERROR]', task, err)
+    }
   }, 2000)
 }
 
@@ -136,14 +135,13 @@ function decide() {
     ['avoid', playerNear()],
     ['sleep', isNight()],
     ['store', fullInv()],
-    ['farm', memory.farms.length],
-    ['mine', memory.ores.length],
+    ['farm', memory.farms.length > 0],
+    ['mine', memory.ores.length > 0],
     ['explore', true]
   ]
-
-  return options
-    .filter(o => o[1])
-    .sort((a,b)=>(learning[b[0]]||1)-(learning[a[0]]||1))[0][0]
+  const valid = options.filter(o => o[1])
+  if (!valid.length) return 'explore'
+  return valid.sort((a,b)=>(learning[b[0]]||1)-(learning[a[0]]||1))[0][0]
 }
 
 // ================= CONDITIONS =================
@@ -157,16 +155,12 @@ function fullInv() { return bot.inventory.emptySlotCount()<2 }
 
 // ================= TASKS =================
 const tasks = {
-
   async avoid() {
     if (!canRun('avoid')) return
     cd('avoid', 5000)
-
     bot.clearControlStates()
-
     const p = Object.values(bot.entities).find(e=>e.type==='player')
     if (p) bot.lookAt(p.position.offset(0,1.6,0))
-
     await sleep(2000)
   },
 
@@ -179,13 +173,11 @@ const tasks = {
   async store() {
     const pos = memory.chests[0]
     if (!pos) return
-
     await go(pos)
-
     const chest = await bot.openChest(bot.blockAt(pos))
     for (const item of bot.inventory.items()) {
       if (item.name.includes('seeds')) continue
-      await chest.deposit(item.type,null,item.count)
+      await chest.deposit(item.type, null, item.count)
     }
     chest.close()
   },
@@ -195,6 +187,7 @@ const tasks = {
     if (!pos) return
     await go(pos)
     await bot.dig(bot.blockAt(pos))
+    memory.farms.shift()
   },
 
   async mine() {
@@ -202,6 +195,7 @@ const tasks = {
     if (!pos) return
     await go(pos)
     await bot.dig(bot.blockAt(pos))
+    memory.ores.shift()
   },
 
   async explore() {
@@ -209,15 +203,18 @@ const tasks = {
     const dz = Math.floor(Math.random()*10-5)
     await go(bot.entity.position.offset(dx,0,dz))
   }
-
 }
 
 // ================= MOVEMENT =================
 function go(pos) {
-  return new Promise(res => {
+  return new Promise((resolve) => {
     bot.pathfinder.setMovements(move)
-    bot.pathfinder.setGoal(new GoalBlock(pos.x,pos.y,pos.z))
-    setTimeout(res, 5000 + Math.random()*5000)
+    bot.pathfinder.setGoal(new GoalBlock(pos.x, pos.y, pos.z))
+    const onArrived = () => {
+      bot.removeListener('goal_reached', onArrived)
+      resolve()
+    }
+    bot.once('goal_reached', onArrived)
   })
 }
 
@@ -225,11 +222,9 @@ function go(pos) {
 function humanizeLoop() {
   setInterval(()=>{
     if (!bot.entity) return
-
     if (Math.random()<0.3) bot.swingArm()
     if (Math.random()<0.2)
       bot.look(Math.random()*Math.PI*2,(Math.random()-0.5)*0.5,true)
-
   }, 5000)
 }
 
