@@ -15,7 +15,7 @@ const config = {
     username: process.env.MC_USERNAME || "Bot123"
   },
   discord: {
-    token: process.env.DISCORD_TOKEN || "bot1483739973902536846"
+    token: process.env.DISCORD_TOKEN || "MTQ4MzczOTk3MzkwMjUzNjg0Ng.G7ovbK.siJ81f3XBu2H3sJIz4yxp9NUSmzoF9Kt7qfXKs"
   }
 }
 
