@@ -4,10 +4,22 @@ const express = require('express')
 const { Client, GatewayIntentBits } = require('discord.js')
 const { pathfinder, goals } = require('mineflayer-pathfinder')
 
-// ================= CONFIG =================
-const config = require('./settings.json')
+// ================= CONFIG (ENV READY) =================
+const config = {
+  server: {
+    ip: process.env.MC_IP || "ward1.aternos.me",
+    port: parseInt(process.env.MC_PORT) || 35547,
+    version: process.env.MC_VERSION || "1.21.11"
+  },
+  bot: {
+    username: process.env.MC_USERNAME || "Bot123"
+  },
+  discord: {
+    token: process.env.DISCORD_TOKEN || "bot1483739973902536846"
+  }
+}
 
-// ================= WEB =================
+// ================= WEB (KEEP ALIVE) =================
 const app = express()
 app.get('/', (req, res) => res.send('Bot is running'))
 app.listen(3000, () => console.log('[Web] Running'))
@@ -21,9 +33,13 @@ function createBot() {
 
   bot = mineflayer.createBot({
     host: config.server.ip,
-    port: config.server.port || 25565,
-    username: config['bot-account'].username,
-    version: false
+    port: config.server.port,
+    username: config.bot.username,
+
+    auth: "offline",                 // REQUIRED for Aternos
+    version: config.server.version,  // MUST MATCH SERVER VERSION
+
+    hideErrors: false
   })
 
   bot.on('login', () => console.log('[MC] Logged in'))
@@ -31,22 +47,25 @@ function createBot() {
   bot.on('spawn', () => {
     console.log('[MC] Spawned')
 
-    // Load plugins once
     bot.loadPlugin(pathfinder)
-
     startAntiAFK()
+  })
+
+  bot.on('kicked', (reason) => {
+    console.log('[MC] Kicked:', reason)
   })
 
   bot.on('end', () => {
     console.log('[MC] Disconnected, reconnecting...')
 
-    // Clear AFK loop to prevent stacking
     if (afkInterval) clearInterval(afkInterval)
 
     setTimeout(createBot, 5000)
   })
 
-  bot.on('error', err => console.log('[MC ERROR]', err.message))
+  bot.on('error', (err) => {
+    console.log('[MC ERROR]', err.message)
+  })
 }
 
 createBot()
@@ -69,7 +88,7 @@ client.once('ready', () => {
 client.on('messageCreate', async (msg) => {
   if (!msg.content.startsWith('!') || msg.author.bot) return
 
-  // Cooldown (2 sec)
+  // Cooldown
   if (cooldown.has(msg.author.id)) return
   cooldown.add(msg.author.id)
   setTimeout(() => cooldown.delete(msg.author.id), 2000)
@@ -100,7 +119,9 @@ client.on('messageCreate', async (msg) => {
 
     if (cmd === 'pos') {
       const p = bot.entity.position
-      return msg.reply(`Position: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`)
+      return msg.reply(
+        `Position: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`
+      )
     }
 
     if (cmd === 'stop') {
