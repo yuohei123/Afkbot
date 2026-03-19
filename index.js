@@ -2,6 +2,7 @@
 const mineflayer = require('mineflayer')
 const express = require('express')
 const { Client, GatewayIntentBits } = require('discord.js')
+const { pathfinder, goals } = require('mineflayer-pathfinder')
 
 // ================= CONFIG =================
 const config = require('./settings.json')
@@ -13,6 +14,7 @@ app.listen(3000, () => console.log('[Web] Running'))
 
 // ================= MINECRAFT BOT =================
 let bot
+let afkInterval
 
 function createBot() {
   console.log('[MC] Connecting...')
@@ -28,11 +30,19 @@ function createBot() {
 
   bot.on('spawn', () => {
     console.log('[MC] Spawned')
-    antiAFK()
+
+    // Load plugins once
+    bot.loadPlugin(pathfinder)
+
+    startAntiAFK()
   })
 
   bot.on('end', () => {
     console.log('[MC] Disconnected, reconnecting...')
+
+    // Clear AFK loop to prevent stacking
+    if (afkInterval) clearInterval(afkInterval)
+
     setTimeout(createBot, 5000)
   })
 
@@ -43,64 +53,83 @@ createBot()
 
 // ================= DISCORD BOT =================
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 })
+
+const cooldown = new Set()
 
 client.once('ready', () => {
   console.log(`[DISCORD] Logged in as ${client.user.tag}`)
 })
 
 client.on('messageCreate', async (msg) => {
-  if (!msg.content.startsWith('!')) return
+  if (!msg.content.startsWith('!') || msg.author.bot) return
+
+  // Cooldown (2 sec)
+  if (cooldown.has(msg.author.id)) return
+  cooldown.add(msg.author.id)
+  setTimeout(() => cooldown.delete(msg.author.id), 2000)
 
   const args = msg.content.slice(1).split(' ')
-  const cmd = args[0]
+  const cmd = args[0].toLowerCase()
 
   if (!bot || !bot.entity) {
     return msg.reply('Minecraft bot not ready')
   }
 
-  // ===== COMMANDS =====
+  try {
 
-  if (cmd === 'say') {
-    const text = args.slice(1).join(' ')
-    bot.chat(text)
-    msg.reply('Sent message')
-  }
+    // ===== COMMANDS =====
 
-  if (cmd === 'jump') {
-    bot.setControlState('jump', true)
-    setTimeout(() => bot.setControlState('jump', false), 500)
-    msg.reply('Jumped')
-  }
+    if (cmd === 'say') {
+      const text = args.slice(1).join(' ')
+      if (!text) return msg.reply('Provide a message')
+      bot.chat(text)
+      return msg.reply('Sent message')
+    }
 
-  if (cmd === 'pos') {
-    const p = bot.entity.position
-    msg.reply(`Position: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`)
-  }
+    if (cmd === 'jump') {
+      bot.setControlState('jump', true)
+      setTimeout(() => bot.setControlState('jump', false), 500)
+      return msg.reply('Jumped')
+    }
 
-  if (cmd === 'stop') {
-    bot.clearControlStates()
-    msg.reply('Stopped')
-  }
+    if (cmd === 'pos') {
+      const p = bot.entity.position
+      return msg.reply(`Position: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`)
+    }
 
-  if (cmd === 'come') {
-    const player = bot.nearestEntity(e => e.type === 'player')
-    if (!player) return msg.reply('No player nearby')
+    if (cmd === 'stop') {
+      bot.clearControlStates()
+      return msg.reply('Stopped')
+    }
 
-    const { pathfinder, goals } = require('mineflayer-pathfinder')
-    const { GoalNear } = goals
+    if (cmd === 'come') {
+      const { GoalNear } = goals
 
-    if (!bot.pathfinder) bot.loadPlugin(pathfinder)
+      const player = bot.nearestEntity(
+        e => e.type === 'player' && e.username !== bot.username
+      )
 
-    bot.pathfinder.setGoal(new GoalNear(
-      player.position.x,
-      player.position.y,
-      player.position.z,
-      1
-    ))
+      if (!player) return msg.reply('No player nearby')
 
-    msg.reply('Coming to player')
+      bot.pathfinder.setGoal(new GoalNear(
+        player.position.x,
+        player.position.y,
+        player.position.z,
+        1
+      ))
+
+      return msg.reply(`Coming to ${player.username}`)
+    }
+
+  } catch (err) {
+    console.log('[COMMAND ERROR]', err.message)
+    msg.reply('Error executing command')
   }
 })
 
@@ -108,12 +137,16 @@ client.on('messageCreate', async (msg) => {
 client.login(config.discord.token)
 
 // ================= ANTI AFK =================
-function antiAFK() {
-  setInterval(() => {
-    if (!bot.entity) return
+function startAntiAFK() {
+  if (afkInterval) clearInterval(afkInterval)
 
+  afkInterval = setInterval(() => {
+    if (!bot || !bot.entity) return
+
+    // Random look
     bot.look(Math.random() * Math.PI * 2, 0, true)
 
+    // Random jump
     if (Math.random() < 0.5) {
       bot.setControlState('jump', true)
       setTimeout(() => bot.setControlState('jump', false), 300)
