@@ -7,15 +7,16 @@ const { pathfinder, goals } = require('mineflayer-pathfinder')
 // ================= CONFIG =================
 const config = {
   server: {
-    ip: "ward1.aternos.me",
+    host: "ward1.aternos.me",
     port: 35547,
-    version: false // auto-detect for any 1.21.x version
+    version: false // auto-detect Minecraft version
   },
   bot: {
     username: "Bot123"
   },
   discord: {
-    token: process.env.DISCORD_TOKEN || "MTQ4MzczOTk3MzkwMjUzNjg0Ng.G7ovbK.siJ81f3XBu2H3sJIz4yxp9NUSmzoF9Kt7qfXKs"
+    token: process.env.DISCORD_TOKEN || "MTQ4MzczOTk3MzkwMjUzNjg0Ng.G7ovbK.siJ81f3XBu2H3sJIz4yxp9NUSmzoF9Kt7qfXKs",
+    alertChannelId: process.env.DISCORD_CHANNEL_ID || "YOUR_CHANNEL_ID"
   }
 }
 
@@ -30,13 +31,12 @@ let afkInterval
 let retryDelay = 5000
 
 function createBot() {
-  console.log(`[MC] Connecting to ${config.server.ip}:${config.server.port}...`)
+  console.log(`[MC] Connecting to ${config.server.host}:${config.server.port}...`)
 
   bot = mineflayer.createBot({
-    host: config.server.ip,
+    host: config.server.host,
     port: config.server.port,
     username: config.bot.username,
-
     auth: "offline",
     version: config.server.version,
     connectTimeout: 30000
@@ -49,6 +49,7 @@ function createBot() {
     retryDelay = 5000
     bot.loadPlugin(pathfinder)
     startAntiAFK()
+    sendDiscordAlert(`✅ Bot connected to ${config.server.host}`)
   })
 
   bot.on('kicked', reason => console.log('[MC] ❌ Kicked:', reason))
@@ -56,7 +57,7 @@ function createBot() {
   bot.on('error', err => console.log('[MC ERROR]', err.code || err.message))
 
   bot.on('end', () => {
-    console.log(`[MC] Disconnected. Reconnecting in ${retryDelay / 1000}s...`)
+    console.log(`[MC] Disconnected. Retrying in ${retryDelay / 1000}s...`)
     if (afkInterval) clearInterval(afkInterval)
     setTimeout(() => {
       retryDelay = Math.min(retryDelay + 5000, 60000)
@@ -74,10 +75,8 @@ function startAntiAFK() {
   afkInterval = setInterval(() => {
     if (!bot || !bot.entity) return
 
-    // Random look
     bot.look(Math.random() * Math.PI * 2, 0, true)
 
-    // Random jump
     if (Math.random() < 0.5) {
       bot.setControlState('jump', true)
       setTimeout(() => bot.setControlState('jump', false), 300)
@@ -101,7 +100,6 @@ client.once('ready', () => console.log(`[DISCORD] Logged in as ${client.user.tag
 client.on('messageCreate', async msg => {
   if (!msg.content.startsWith('!') || msg.author.bot) return
 
-  // Cooldown 2 seconds per user
   if (cooldown.has(msg.author.id)) return
   cooldown.add(msg.author.id)
   setTimeout(() => cooldown.delete(msg.author.id), 2000)
@@ -149,6 +147,14 @@ client.on('messageCreate', async msg => {
     msg.reply('❌ Command error')
   }
 })
+
+// ================= DISCORD ALERT FUNCTION =================
+function sendDiscordAlert(message) {
+  if (!client || !client.isReady()) return
+  const channel = client.channels.cache.get(config.discord.alertChannelId)
+  if (!channel) return
+  channel.send(message).catch(console.error)
+}
 
 // ================= LOGIN =================
 client.login(config.discord.token)
